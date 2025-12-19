@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>Magic Christmas | Particle Heart Top</title>
+    <style>
+        body { margin: 0; background: #050408; overflow: hidden; font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; }
+        canvas { display: block; }
+
+        /* ✅ 新增：右侧 UI 样式 */
+        .wish-ui {
+            position: absolute;
+            top: 40px;
+            right: 40px;
+            z-index: 100;
+            pointer-events: none; /* 不遮挡鼠标旋转 3D */
+            text-align: right;
+            color: #ffd27d; /* 香槟金 */
+        }
+
+        .glass-card {
+            background: rgba(255, 182, 193, 0.05); /* 极淡的粉色背景 */
+            backdrop-filter: blur(12px); /* 毛玻璃效果 */
+            -webkit-backdrop-filter: blur(12px);
+            padding: 20px 30px;
+            border-radius: 20px;
+            border: 1px solid rgba(255, 210, 125, 0.2);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5), 0 0 15px rgba(255, 105, 180, 0.1);
+            animation: fadeInRight 1.2s ease-out;
+        }
+
+        .to-label {
+            font-size: 14px;
+            text-transform: uppercase;
+            letter-spacing: 3px;
+            margin: 0;
+            opacity: 0.8;
+            color: #ff69b4; /* 浪漫粉 */
+        }
+
+        .name-text {
+            font-size: 32px;
+            font-weight: 300;
+            margin: 5px 0;
+            text-shadow: 0 0 10px rgba(255, 210, 125, 0.4);
+        }
+
+        .wish-text {
+            font-size: 20px;
+            font-style: italic;
+            margin: 0;
+            background: linear-gradient(45deg, #ffd27d, #ff69b4);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        @keyframes fadeInRight {
+            from { opacity: 0; transform: translateX(30px); }
+            to { opacity: 1; transform: translateX(0); }
+        }
+    </style>
+</head>
+<body>
+
+<div class="wish-ui">
+    <div class="glass-card">
+        <p class="to-label">Special gift for</p>
+        <div class="name-text">TO: 10</div> <p class="wish-text">Merry Christmas!</p>
+    </div>
+</div>
+
+<script type="importmap">
+    {
+        "imports": {
+            "three": "https://unpkg.com/three@0.160.0/build/three.module.js"
+        }
+    }
+</script>
+
+<script type="module">
+    import * as THREE from 'three';
+
+    // --- 配置参数 ---
+    const CONFIG = {
+        TREE_PARTICLES: 120000,
+        NEEDLE_PARTICLES: 80000,
+        GLIMMER_PARTICLES: 20000,
+        SNOW_PARTICLES: 12000,
+        HEART_PARTICLES: 3000, 
+        RING_PARTICLES: 8000, // ✅ 新增：圆环粒子数量
+        TREE_HEIGHT: 6,
+        LAYERS: 90,
+        ROTATION_SPEED: 0.12, 
+        COLORS: {
+            TRUNK: '#ff1493',
+            GOLD: '#ffd27d',
+            HEART_PINK: '#ff1493', 
+            SPIRAL: '#ff1493', 
+            NEEDLE_ROSE: '#e91e63',
+            SNOW_WHITE: '#ffffff',
+            SNOW_PINK: '#fff0f5'
+        }
+    };
+
+    const scene = new THREE.Scene();
+    const camera = new THREE.PerspectiveCamera(45, window.innerWidth / window.innerHeight, 0.1, 1000);
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    document.body.appendChild(renderer.domElement);
+
+    camera.position.set(0, 4, 13);
+    camera.lookAt(0, 3, 0);
+
+    // --- 1. 核心树体粒子 ---
+    const treeMat = new THREE.ShaderMaterial({
+        uniforms: { uTime: { value: 0 } },
+        transparent: true, blending: THREE.AdditiveBlending, depthWrite: false,
+        vertexShader: `
+            uniform float uTime;
+            attribute float aRandom;
+            attribute float aSize;
+            varying vec3 vColor;
+            varying float vAlpha;
+            void main() {
+                vec3 pos = position;
+                float angle = atan(pos.z, pos.x) + (uTime * 0.15);
+                float radius = length(pos.xz);
+                vec3 animatedPos = vec3(cos(angle) * radius, pos.y, sin(angle) * radius);
+                float h = pos.y / 6.0;
+                vec3 deepPink = vec3(1.0, 0.08, 0.58);
+                vec3 hotPink = vec3(1.0, 0.41, 0.71);
+                vec3 gold = vec3(1.0, 0.82, 0.55);
+                vColor = mix(mix(gold, hotPink, smoothstep(0.0, 0.4, h)), deepPink, smoothstep(0.4, 1.0, h));
+                vec4 mvPosition = modelViewMatrix * vec4(animatedPos, 1.0);
+                vAlpha = (1.1 - h * 0.6) * (0.6 + sin(uTime * 2.0 + aRandom * 10.0) * 0.4);
+                gl_PointSize = aSize * (50.0 / -mvPosition.z);
+                gl_Position = projectionMatrix * mvPosition;
+            }
+        `,
+        fragmentShader: `
+            varying vec3 vColor;
+            varying float vAlpha;
+            void main() {
+                float d = distance(gl_PointCoord, vec2(0.5));
+                if (d > 0.5) discard;
+                gl_FragColor = vec4(vColor, pow(1.0 - d * 2.0, 2.5) * vAlpha);
+            }
+        `
+    });
+
+    const treeGeo = new THREE.BufferGeometry();
+    const treePosArr = new Float32Array(CONFIG.TREE_PARTICLES * 3);
+    const treeRndArr = new Float32Array(CONFIG.TREE_PARTICLES);
+    const treeSzArr = new Float32Array(CONFIG.TREE_PARTICLES);
+    for (let i = 0; i < CONFIG.TREE_PARTICLES; i++) {
+        const y = (Math.random()) * CONFIG.TREE_HEIGHT;
+        const r = (1.0 - y / CONFIG.TREE_HEIGHT) * 2.8; 
+        const angle = Math.random() * Math.PI * 2;
+        treePosArr[i * 3] = Math.cos(angle) * r;
+        treePosArr[i * 3 + 1] = y;
+        treePosArr[i * 3 + 2] = Math.sin(angle) * r;
+        treeRndArr[i] = Math.random();
+        treeSzArr[i] = Math.random() * 1.5 + 0.5;
+    }
+    treeGeo.setAttribute('position', new THREE.BufferAttribute(treePosArr, 3));
+    treeGeo.setAttribute('aRandom', new THREE.BufferAttribute(treeRndArr, 1));
+    treeGeo.setAttribute('aSize', new THREE.BufferAttribute(treeSzArr, 1));
+    scene.add(new THREE.Points(treeGeo, treeMat));
+
+    // --- 2. 针叶层粒子 ---
+    const needleGeo = new THREE.BufferGeometry();
+    const needlePosArr = new Float32Array(CONFIG.NEEDLE_PARTICLES * 3);
+    for (let i = 0; i < CONFIG.NEEDLE_PARTICLES; i++) {
+        const y = Math.random() * CONFIG.TREE_HEIGHT;
+        const r = (1.0 - y / CONFIG.TREE_HEIGHT) * 2.85;
+        const angle = Math.random() * Math.PI * 2;
+        needlePosArr[i*3] = Math.cos(angle) * (r + (Math.random()-0.5)*0.2);
+        needlePosArr[i*3+1] = y + (Math.random()-0.5)*0.05;
+        needlePosArr[i*3+2] = Math.sin(angle) * (r + (Math.random()-0.5)*0.2);
+    }
+    needleGeo.setAttribute('position', new THREE.BufferAttribute(needlePosArr, 3));
+    scene.add(new THREE.Points(needleGeo, new THREE.PointsMaterial({
+        color: CONFIG.COLORS.NEEDLE_ROSE, size: 0.015, transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending
+    })));
+
+    // --- 3. 上部闪烁粒子 ---
+    const glimmerGeo = new THREE.BufferGeometry();
+    const glimPosArr = new Float32Array(CONFIG.GLIMMER_PARTICLES * 3);
+    const glimRndArr = new Float32Array(CONFIG.GLIMMER_PARTICLES);
+    for (let i = 0; i < CONFIG.GLIMMER_PARTICLES; i++) {
+        const y = (0.5 + Math.random() * 0.5) * CONFIG.TREE_HEIGHT;
+        const r = (1.0 - y / CONFIG.TREE_HEIGHT) * 2.8;
+        const angle = Math.random() * Math.PI * 2;
+        glimPosArr[i*3] = Math.cos(angle) * r;
+        glimPosArr[i*3+1] = y;
+        glimPosArr[i*3+2] = Math.sin(angle) * r;
+        glimRndArr[i] = Math.random();
+    }
+    glimmerGeo.setAttribute('position', new THREE.BufferAttribute(glimPosArr, 3));
+    glimmerGeo.setAttribute('aRandom', new THREE.BufferAttribute(glimRndArr, 1));
+    const glimmerMat = new THREE.ShaderMaterial({
+        uniforms: { uTime: { value: 0 } },
+        transparent: true, blending: THREE.AdditiveBlending,
+        vertexShader: `
+            uniform float uTime;
+            attribute float aRandom;
+            varying float vAlpha;
+            void main() {
+                vAlpha = pow(sin(uTime * 5.0 + aRandom * 20.0) * 0.5 + 0.5, 3.0);
+                vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+                gl_PointSize = (2.0 + aRandom * 3.0) * (60.0 / -mvPosition.z);
+                gl_Position = projectionMatrix * mvPosition;
+            }
+        `,
+        fragmentShader: `
+            varying float vAlpha;
+            void main() {
+                if (distance(gl_PointCoord, vec2(0.5)) > 0.5) discard;
+                gl_FragColor = vec4(1.0, 0.8, 0.9, vAlpha);
+            }
+        `
+    });
+    scene.add(new THREE.Points(glimmerGeo, glimmerMat));
+
+    // --- 4. 雪花粒子 ---
+    const snowGeo = new THREE.BufferGeometry();
+    const snowPosArr = new Float32Array(CONFIG.SNOW_PARTICLES * 3);
+    const snowVelArr = new Float32Array(CONFIG.SNOW_PARTICLES);
+    for (let i = 0; i < CONFIG.SNOW_PARTICLES; i++) {
+        snowPosArr[i*3] = (Math.random()-0.5)*30;
+        snowPosArr[i*3+1] = Math.random()*20;
+        snowPosArr[i*3+2] = (Math.random()-0.5)*20;
+        snowVelArr[i] = 0.01 + Math.random()*0.03;
+    }
+    snowGeo.setAttribute('position', new THREE.BufferAttribute(snowPosArr, 3));
+    const snowPoints = new THREE.Points(snowGeo, new THREE.PointsMaterial({
+        size: 0.04, color: '#ffffff', transparent: true, opacity: 0.7, blending: THREE.AdditiveBlending
+    }));
+    scene.add(snowPoints);
+
+    // --- 5. 顶部粒子爱心 ---
+    const heartGeo = new THREE.BufferGeometry();
+    const heartPosArr = new Float32Array(CONFIG.HEART_PARTICLES * 3);
+    const heartRndArr = new Float32Array(CONFIG.HEART_PARTICLES);
+
+    for (let i = 0; i < CONFIG.HEART_PARTICLES; i++) {
+        const t = Math.random() * Math.PI * 2;
+        const x = 16 * Math.pow(Math.sin(t), 3);
+        const y = 13 * Math.cos(t) - 5 * Math.cos(2 * t) - 2 * Math.cos(3 * t) - Math.cos(4 * t);
+        const scale = Math.random();
+        heartPosArr[i * 3] = x * scale * 0.025;
+        heartPosArr[i * 3 + 1] = y * scale * 0.025;
+        heartPosArr[i * 3 + 2] = (Math.random() - 0.5) * 0.15; 
+        heartRndArr[i] = Math.random();
+    }
+    heartGeo.setAttribute('position', new THREE.BufferAttribute(heartPosArr, 3));
+    heartGeo.setAttribute('aRandom', new THREE.BufferAttribute(heartRndArr, 1));
+
+    const heartMat = new THREE.ShaderMaterial({
+        uniforms: { uTime: { value: 0 } },
+        transparent: true, blending: THREE.AdditiveBlending, depthWrite: false,
+        vertexShader: `
+            uniform float uTime;
+            attribute float aRandom;
+            varying float vAlpha;
+            void main() {
+                vAlpha = 0.4 + pow(sin(uTime * 3.0 + aRandom * 10.0) * 0.5 + 0.5, 2.0) * 0.6;
+                vec3 pos = position; 
+                vec4 mvPosition = modelViewMatrix * vec4(pos, 1.0);
+                gl_PointSize = (1.5 + aRandom * 2.0) * (40.0 / -mvPosition.z);
+                gl_Position = projectionMatrix * mvPosition;
+            }
+        `,
+        fragmentShader: `
+            varying float vAlpha;
+            void main() {
+                if (distance(gl_PointCoord, vec2(0.5)) > 0.5) discard;
+                vec3 pinkColor = vec3(1.0, 0.08, 0.58) * 0.6; 
+                gl_FragColor = vec4(pinkColor, vAlpha);
+            }
+        `
+    });
+
+    const heartPoints = new THREE.Points(heartGeo, heartMat);
+    heartPoints.position.y = CONFIG.TREE_HEIGHT + 0.35;
+    scene.add(heartPoints);
+
+    // --- 6. 螺旋带 ---
+    const spiralGroup = new THREE.Group();
+    scene.add(spiralGroup);
+    for (let s = 0; s < 4; s++) {
+        const geo = new THREE.BufferGeometry();
+        const pos = [];
+        const phase = (Math.PI * 2 / 4) * s;
+        for (let i = 0; i < 6000; i++) {
+            const t = i / 6000;
+            if (t > 0.85 && Math.random() > (1.0 - t) * 8.0) continue;
+            const r = (1.0 - t) * 2.8;
+            const angle = Math.pow(t, 0.85) * Math.PI * 2.8 + phase + (Math.random() - 0.5) * (1.95 / (r + 0.1));
+            pos.push(Math.cos(angle) * r, t * CONFIG.TREE_HEIGHT, Math.sin(angle) * r);
+        }
+        geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+        spiralGroup.add(new THREE.Points(geo, new THREE.PointsMaterial({
+            color: CONFIG.COLORS.SPIRAL, size: 0.085, transparent: true, opacity: 0.75, blending: THREE.AdditiveBlending
+        })));
+    }
+
+    // --- 7. 底部三圈金色粒子圆环 ---
+    const ringGroup = new THREE.Group();
+    scene.add(ringGroup);
+
+    const ringMat = new THREE.ShaderMaterial({
+        uniforms: { uTime: { value: 0 } },
+        transparent: true, blending: THREE.AdditiveBlending, depthWrite: false,
+        vertexShader: `
+            uniform float uTime;
+            attribute float aRandom;
+            varying float vAlpha;
+            void main() {
+                vAlpha = 0.2 + pow(sin(uTime * 1.5 + aRandom * 15.0) * 0.5 + 0.5, 2.0) * 0.6;
+                vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+                gl_PointSize = (0.6 + aRandom * 0.8) * (60.0 / -mvPosition.z);
+                gl_Position = projectionMatrix * mvPosition;
+            }
+        `,
+        fragmentShader: `
+            varying float vAlpha;
+            void main() {
+                if (distance(gl_PointCoord, vec2(0.5)) > 0.5) discard;
+                gl_FragColor = vec4(1.0, 0.85, 0.5, vAlpha); 
+            }
+        `
+    });
+
+    const baseRadius = 2.8; 
+    const ringConfig = [
+        { r: baseRadius * 1.25, p: CONFIG.RING_PARTICLES * 0.3 },
+        { r: baseRadius * 1.40, p: CONFIG.RING_PARTICLES * 0.35 },
+        { r: baseRadius * 1.50, p: CONFIG.RING_PARTICLES * 0.35 }
+    ];
+
+    ringConfig.forEach((ring) => {
+        const ringGeo = new THREE.BufferGeometry();
+        const posArr = new Float32Array(ring.p * 3);
+        const rndArr = new Float32Array(ring.p);
+        for (let i = 0; i < ring.p; i++) {
+            const angle = (i / ring.p) * Math.PI * 2 + Math.random() * 0.2;
+            const spread = (Math.random() - 0.5) * 0.15;
+            posArr[i * 3] = Math.cos(angle) * (ring.r + spread);
+            posArr[i * 3 + 1] = -0.1 + Math.random() * 0.1;
+            posArr[i * 3 + 2] = Math.sin(angle) * (ring.r + spread);
+            rndArr[i] = Math.random();
+        }
+        ringGeo.setAttribute('position', new THREE.BufferAttribute(posArr, 3));
+        ringGeo.setAttribute('aRandom', new THREE.BufferAttribute(rndArr, 1));
+        ringGroup.add(new THREE.Points(ringGeo, ringMat));
+    });
+
+    // --- 动画循环 ---
+    const clock = new THREE.Clock();
+    function animate() {
+        requestAnimationFrame(animate);
+        const delta = clock.getElapsedTime();
+        treeMat.uniforms.uTime.value = delta;
+        glimmerMat.uniforms.uTime.value = delta;
+        heartMat.uniforms.uTime.value = delta;
+        ringMat.uniforms.uTime.value = delta;
+
+        spiralGroup.rotation.y = delta * CONFIG.ROTATION_SPEED;
+        ringGroup.rotation.y = delta * -0.08;
+
+        const snowP = snowPoints.geometry.attributes.position.array;
+        for (let i = 0; i < CONFIG.SNOW_PARTICLES; i++) {
+            snowP[i * 3 + 1] -= snowVelArr[i];
+            if (snowP[i * 3 + 1] < -2) snowP[i * 3 + 1] = 12;
+        }
+        snowPoints.geometry.attributes.position.needsUpdate = true;
+        renderer.render(scene, camera);
+    }
+    animate();
+
+    window.addEventListener('resize', () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+    });
+</script>
+</body>
+</html>
